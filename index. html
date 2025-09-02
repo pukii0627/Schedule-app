@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>我的課表</title>
+  <link rel="manifest" href="manifest.json">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js");
+    }
+  </script>
+</head>
+<body class="p-6 max-w-5xl mx-auto">
+  <h1 class="text-2xl font-bold mb-4 text-center">📅 我的課表</h1>
+
+  <!-- 節次與時間設定區 -->
+  <div class="mb-6 flex flex-col gap-2">
+    <label>節數 <input id="numPeriods" type="number" value="7" min="1" class="border p-2 rounded w-full"/></label>
+    <label>每節時間（每行一節，格式 8:10-8:50）
+      <textarea id="periodTimes" class="border p-2 rounded w-full h-32">8:10-8:50
+9:00-9:40
+10:00-10:40
+11:00-11:40
+13:00-13:40
+14:00-14:40
+15:00-15:40</textarea>
+    </label>
+    <button onclick="generatePeriods()" class="bg-purple-500 text-white rounded p-2 hover:bg-purple-600">生成節次</button>
+  </div>
+
+  <!-- 功能按鈕 -->
+  <div class="mb-6 flex flex-wrap gap-2">
+    <button onclick="saveSchedule()" class="bg-green-500 text-white rounded p-2 hover:bg-green-600">💾 存檔</button>
+    <button onclick="downloadPDF()" class="bg-yellow-500 text-white rounded p-2 hover:bg-yellow-600">📥 下載 PDF</button>
+    <button onclick="downloadImage()" class="bg-pink-500 text-white rounded p-2 hover:bg-pink-600">📸 存圖片</button>
+  </div>
+
+  <!-- 課表顯示 -->
+  <div id="scheduleContainer" class="overflow-x-auto"></div>
+
+  <!-- 新增 / 編輯課程 Modal -->
+  <div id="courseModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center">
+    <div class="bg-white p-6 rounded-lg w-80">
+      <h2 id="modalTitle" class="text-xl font-bold mb-4">新增課程</h2>
+      <div class="flex flex-col gap-2">
+        <input id="courseEmoji" type="text" placeholder="Emoji (例如 📘)" class="border p-2 rounded w-full" />
+        <input id="courseName" type="text" placeholder="課程名稱" class="border p-2 rounded w-full" />
+        <input id="courseTeacher" type="text" placeholder="授課教師" class="border p-2 rounded w-full" />
+        <input id="courseLocation" type="text" placeholder="教室地點" class="border p-2 rounded w-full" />
+        <label>開始節次<select id="courseStartPeriod" class="border p-2 rounded w-full"></select></label>
+        <label>結束節次<select id="courseEndPeriod" class="border p-2 rounded w-full"></select></label>
+        <input id="courseColor" type="color" class="border p-1 rounded w-full" />
+      </div>
+      <div class="flex justify-between mt-4">
+        <button id="deleteBtn" onclick="deleteCourse()" class="hidden bg-red-500 text-white rounded p-2">刪除</button>
+        <div class="flex gap-2">
+          <button onclick="closeModal()" class="bg-gray-400 text-white rounded p-2">取消</button>
+          <button onclick="saveCourse()" class="bg-blue-500 text-white rounded p-2 hover:bg-blue-600">確認</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const days = ["一","二","三","四","五"];
+    let periods = [];
+    let times = [];
+    let courses = [];
+    let selectedDay = null;
+    let selectedPeriod = null;
+    let editingCourse = null;
+
+    const colors = ["#a0e7e5","#b4f8c8","#fbe7c6","#ffb5a7","#cdb4db","#ffc8dd","#b5ead7","#f8c291"];
+
+    function generatePeriods(){
+      const num = parseInt(document.getElementById('numPeriods').value);
+      const timesInput = document.getElementById('periodTimes').value.split('\n');
+      periods = [];
+      times = [];
+      for(let i=0;i<num;i++){
+        periods.push(`第${i+1}節`);
+        times.push(timesInput[i] ? timesInput[i].trim() : '');
+      }
+      renderTable();
+    }
+
+    function renderTable(){
+      const container=document.getElementById('scheduleContainer');
+      container.innerHTML='';
+      const table=document.createElement('table');
+      table.className='table-fixed border-collapse border border-gray-400 w-full text-center';
+
+      // 表頭
+      const thead=document.createElement('thead');
+      let headRow=document.createElement('tr');
+      headRow.innerHTML='<th class="border border-gray-400 p-2 w-24">節次/時間</th>';
+      days.forEach(day=>{
+        const th=document.createElement('th');
+        th.className='border border-gray-400 p-2';
+        th.textContent=`星期${day}`;
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      // 內容
+      const tbody=document.createElement('tbody');
+      periods.forEach((period,i)=>{
+        const row=document.createElement('tr');
+        const time=times[i];
+        const firstCell=document.createElement('td');
+        firstCell.className='border border-gray-400 p-2';
+        firstCell.innerHTML=`<div class='font-bold'>${period}</div><div>${time}</div>`;
+        row.appendChild(firstCell);
+
+        days.forEach(day=>{
+          const td=document.createElement('td');
+          td.className='border border-gray-400 align-middle h-24 cursor-pointer';
+          const course=courses.find(c=>c.day===day && c.start<=i && c.end>=i);
+          if(course){
+            td.style.backgroundColor=course.color;
+            td.innerHTML=`<div class='flex flex-col items-center justify-center h-full text-center'>
+              <div>${course.emoji} ${course.name}</div>
+              <div>${course.teacher}</div>
+              <div>${course.location}</div>
+            </div>`;
+            td.onclick=()=>openModal(day,i,course);
+          } else {
+            td.onclick=()=>openModal(day,i,null);
+          }
+          row.appendChild(td);
+        });
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    function openModal(day,periodIndex,course){
+      selectedDay=day;
+      selectedPeriod=periodIndex;
+      editingCourse=course;
+      document.getElementById('courseModal').classList.remove('hidden');
+      document.getElementById('modalTitle').textContent=course?"編輯課程":"新增課程";
+
+      const startSelect=document.getElementById('courseStartPeriod');
+      const endSelect=document.getElementById('courseEndPeriod');
+      startSelect.innerHTML=''; endSelect.innerHTML='';
+      periods.forEach((p,idx)=>{
+        let opt=document.createElement('option');
+        opt.value=idx; opt.textContent=p;
+        if(idx===periodIndex) opt.selected=true;
+        startSelect.appendChild(opt);
+        let opt2=document.createElement('option');
+        opt2.value=idx; opt2.textContent=p;
+        if(idx===periodIndex) opt2.selected=true;
+        endSelect.appendChild(opt2);
+      });
+
+      if(course){
+        document.getElementById('courseEmoji').value=course.emoji;
+        document.getElementById('courseName').value=course.name;
+        document.getElementById('courseTeacher').value=course.teacher;
+        document.getElementById('courseLocation').value=course.location;
+        document.getElementById('courseColor').value=course.color;
+        startSelect.value=course.start;
+        endSelect.value=course.end;
+        document.getElementById('deleteBtn').classList.remove('hidden');
+      } else {
+        document.getElementById('courseEmoji').value='';
+        document.getElementById('courseName').value='';
+        document.getElementById('courseTeacher').value='';
+        document.getElementById('courseLocation').value='';
+        document.getElementById('courseColor').value=colors[Math.floor(Math.random()*colors.length)];
+        startSelect.value=periodIndex;
+        endSelect.value=periodIndex;
+        document.getElementById('deleteBtn').classList.add('hidden');
+      }
+    }
+
+    function closeModal(){
+      document.getElementById('courseModal').classList.add('hidden');
+    }
+
+    function saveCourse(){
+      const emoji=document.getElementById('courseEmoji').value.trim();
+      const name=document.getElementById('courseName').value.trim();
+      const teacher=document.getElementById('courseTeacher').value.trim();
+      const location=document.getElementById('courseLocation').value.trim();
+      const color=document.getElementById('courseColor').value;
+      const start=parseInt(document.getElementById('courseStartPeriod').value);
+      const end=parseInt(document.getElementById('courseEndPeriod').value);
+      if(!name) return;
+
+      if(editingCourse){
+        editingCourse.emoji=emoji;
+        editingCourse.name=name;
+        editingCourse.teacher=teacher;
+        editingCourse.location=location;
+        editingCourse.color=color;
+        editingCourse.start=start;
+        editingCourse.end=end;
+      } else {
+        courses.push({emoji,name,teacher,location,day:selectedDay,start,end,color});
+      }
+      closeModal();
+      renderTable();
+    }
+
+    function deleteCourse(){
+      courses=courses.filter(c=>!(c.day===selectedDay && c===editingCourse));
+      closeModal();
+      renderTable();
+    }
+
+    function saveSchedule(){
+      localStorage.setItem('mySchedule', JSON.stringify({periods,times,courses}));
+      alert('課表已存檔 ✅');
+    }
+
+    function loadSchedule(){
+      const saved=localStorage.getItem('mySchedule');
+      if(!saved) return;
+      const data=JSON.parse(saved);
+      periods=data.periods||[];
+      times=data.times||[];
+      courses=data.courses||[];
+      renderTable();
+    }
+
+    async function downloadPDF(){
+      const container=document.getElementById('scheduleContainer');
+      const canvas=await html2canvas(container);
+      const imgData=canvas.toDataURL('image/png');
+      const { jsPDF }=window.jspdf;
+      const pdf=new jsPDF('l','pt','a4');
+      const imgProps=pdf.getImageProperties(imgData);
+      const pdfWidth=pdf.internal.pageSize.getWidth();
+      const pdfHeight=(imgProps.height*pdfWidth)/imgProps.width;
+      pdf.addImage(imgData,'PNG',0,0,pdfWidth,pdfHeight);
+      pdf.save('我的課表.pdf');
+    }
+
+    async function downloadImage(){
+      const container=document.getElementById('scheduleContainer');
+      const canvas=await html2canvas(container);
+      const imgData=canvas.toDataURL('image/png');
+      const link=document.createElement('a');
+      link.href=imgData;
+      link.download='我的課表.png';
+      link.click();
+    }
+
+    window.onload=loadSchedule;
+  </script>
+</body>
+</html>
